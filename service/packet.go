@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -24,12 +25,14 @@ var (
 	cmd      *exec.Cmd   //当前命令体
 	status   = "0"       //是否上锁
 	pcapName string      //保存的文件名
+	timer    *time.Timer
 )
 
 type PackInfo struct {
 	Ip      string `json:"ip"`
 	Port    string `json:"port"`
 	NetName string `json:"netName"`
+	TimeOut string `json:"timeOut"`
 }
 
 // 获取所有网卡名
@@ -106,6 +109,11 @@ func (p *pack) StartPacket(packinfo *PackInfo) error {
 
 	fmt.Println("抓包程序已启动")
 	//到这里代表已经启动抓包了
+
+	go func() {
+		//起携程去进行定时器
+		timeout(packinfo.TimeOut)
+	}()
 	return nil
 }
 
@@ -157,5 +165,44 @@ func (p *pack) StopPacket(cont *gin.Context) error {
 	fmt.Println("写入字节：", n)
 	//解锁抓包进程
 	status = "0"
+	//删除本地数据包
+	os.Remove(pcapName)
+	//结束定时器
+	closeTimer()
 	return nil
+}
+
+func timeout(timerr string) {
+	//fmt.Println("超时时间：", timerr, "秒")
+	sec, _ := strconv.Atoi(timerr)
+	//创建定时器
+	timer = time.NewTimer(time.Duration(sec) * time.Second)
+	fmt.Println("定时器启动，时间：", timerr, "秒")
+	//定时时间到
+	<-timer.C
+	if status == "1" {
+		//说明还在抓包中
+		//直接停掉抓包进程
+		// 发送Ctrl+C信号给进程
+		err := process.Signal(os.Interrupt)
+		if err != nil {
+			fmt.Println("发送停止抓包信号失败：", err.Error())
+		}
+		// 等待命令执行完成
+		err = cmd.Wait()
+		if err != nil {
+			fmt.Println("命令执行失败：", err.Error())
+		}
+		fmt.Println("抓包结束")
+		status = "0"
+		//删除本地数据包
+		os.Remove(pcapName)
+		//结束定时器
+		closeTimer()
+	}
+}
+
+// 结束定时器
+func closeTimer() {
+	timer.Stop()
 }
